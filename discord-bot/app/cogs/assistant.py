@@ -11,7 +11,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from app.ai import AnthropicAnswerGenerator
+from app.ai import GeminiAnswerGenerator
 from app.config import Settings
 from app.database import Database, SupportCase
 from app.ingest import MessageIngestor
@@ -77,11 +77,11 @@ class AssistantCog(commands.Cog):
             threshold=self.settings.similarity_threshold,
         )
         generator = (
-            AnthropicAnswerGenerator(
-                api_key=self.settings.anthropic_api_key,
-                model=self.settings.anthropic_model,
+            GeminiAnswerGenerator(
+                api_key=self.settings.gemini_api_key,
+                model=self.settings.gemini_model,
             )
-            if self.settings.anthropic_api_key
+            if self.settings.gemini_api_key
             else None
         )
         self.qa = QAPipeline(
@@ -169,22 +169,10 @@ class AssistantCog(commands.Cog):
                     ephemeral=self.settings.ask_ephemeral,
                 )
                 return
-            reason_override = "Nguồn vừa thay đổi, bị xóa hoặc không còn truy cập được."
-        else:
-            reason_override = None
 
-        outcome = await self._route_support(
-            guild=guild,
-            requester=member,
-            origin_channel=channel,
-            origin_message=None,
-            request_key=f"interaction:{guild.id}:{interaction.id}",
-            question=question,
-            result=result,
-            reason_override=reason_override,
-        )
+        # Bot không trả lời được — thông báo trực tiếp cho người dùng
         await interaction.followup.send(
-            self._support_user_message(outcome, result, reason_override),
+            self._fallback_message(result),
             ephemeral=self.settings.ask_ephemeral,
         )
 
@@ -225,8 +213,7 @@ class AssistantCog(commands.Cog):
             name="Trạng thái hệ thống",
             value=(
                 f"Nguồn cho phép: {'✅' if source_ready else '⚠️ chưa cấu hình'}\n"
-                f"AI: {'✅' if self.settings.anthropic_api_key else '⚠️ chưa cấu hình'}\n"
-                f"Hỗ trợ người thật: {'✅' if support_ready else '⚠️ chưa cấu hình'}"
+                f"AI (Gemini): {'✅' if self.settings.gemini_api_key else '⚠️ chưa cấu hình'}"
             ),
             inline=False,
         )
@@ -508,6 +495,33 @@ class AssistantCog(commands.Cog):
         )
         embed.set_footer(text="Nguồn được kiểm tra lại ngay trước khi gửi; bot không tự tạo link.")
         return embed
+
+    def _fallback_message(self, result: QAResult) -> str:
+        """Return a user-facing message when the bot cannot answer confidently."""
+        reason_labels = {
+            "no_relevant_sources": "Không tìm thấy nguồn liên quan trong dữ liệu đã được nạp.",
+            "no_trusted_sources_for_sensitive_question": (
+                "Câu hỏi liên quan đến deadline/điểm số cần nguồn chính thức nhưng chưa có."
+            ),
+            "conflicting_trusted_sources": (
+                "Có thông tin mâu thuẫn giữa các nguồn. Vui lòng hỏi trực tiếp mentor/admin."
+            ),
+            "no_citable_sources": "Không có nguồn đủ điều kiện để trích dẫn.",
+            "ai_not_configured": "AI chưa được cấu hình (thiếu GEMINI_API_KEY).",
+            "malformed_ai_response": "AI trả về kết quả không hợp lệ. Vui lòng thử lại sau.",
+            "ai_provider_unavailable": "Dịch vụ AI tạm thời không khả dụng. Vui lòng thử lại sau.",
+            "ai_generation_failed": "AI gặp lỗi khi tạo câu trả lời. Vui lòng thử lại sau.",
+            "missing_source_references": "AI không cung cấp được nguồn cho câu trả lời.",
+            "invalid_source_references": "AI trả về nguồn không hợp lệ.",
+            "low_confidence": "Mình chưa đủ chắc chắn để trả lời câu hỏi này.",
+            "human_review_requested": "Câu hỏi này cần người có chuyên môn xem xét.",
+        }
+        detail = reason_labels.get(result.reason, result.reason)
+        return (
+            "Mình chưa có đủ thông tin chắc chắn để trả lời câu hỏi này.\n"
+            f"Lý do: {detail}\n"
+            "Bạn có thể hỏi trực tiếp mentor hoặc admin để được hỗ trợ."
+        )
 
     async def _route_support(
         self,
@@ -827,22 +841,10 @@ class AssistantCog(commands.Cog):
                         mention_author=False,
                     )
                     return
-                reason_override = "Nguồn vừa thay đổi, bị xóa hoặc không còn truy cập được."
-            else:
-                reason_override = None
 
-            outcome = await self._route_support(
-                guild=message.guild,
-                requester=message.author,
-                origin_channel=message.channel,
-                origin_message=message,
-                request_key=f"message:{message.guild.id}:{message.id}",
-                question=question,
-                result=result,
-                reason_override=reason_override,
-            )
+            # Bot không trả lời được — thông báo trực tiếp
             await message.reply(
-                self._support_user_message(outcome, result, reason_override),
+                self._fallback_message(result),
                 mention_author=False,
                 allowed_mentions=discord.AllowedMentions.none(),
             )

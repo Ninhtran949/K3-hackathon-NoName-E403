@@ -93,8 +93,8 @@ class Settings:
     enable_message_content_intent: bool
     welcome_channel_id: int | None
     enable_member_intent: bool
-    anthropic_api_key: str | None
-    anthropic_model: str
+    gemini_api_key: str | None
+    gemini_model: str
     routing_path: Path
     top_k: int
     similarity_threshold: float
@@ -172,8 +172,8 @@ class Settings:
                 values.get("ENABLE_MEMBER_INTENT"),
                 "ENABLE_MEMBER_INTENT",
             ),
-            anthropic_api_key=values.get("ANTHROPIC_API_KEY", "").strip() or None,
-            anthropic_model=(values.get("ANTHROPIC_MODEL", "").strip() or "claude-sonnet-5"),
+            gemini_api_key=values.get("GEMINI_API_KEY", "").strip() or None,
+            gemini_model=(values.get("GEMINI_MODEL", "").strip() or "gemini-2.5-flash"),
             routing_path=_resolve_path(
                 root,
                 values.get("ROUTING_CONFIG_PATH"),

@@ -6,7 +6,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 Confidence = Literal["high", "low"]
 
@@ -39,7 +39,7 @@ Security and grounding rules:
   confidence to "low" and needs_human to true.
 - Source message IDs must be copied exactly from SOURCES. Never invent or transform an ID.
 - Never put a URL in the answer or source label. The application builds links from trusted data.
-- Submit exactly one call to the required tool. Do not answer in free text.
+- Return your answer as a JSON object matching the required schema. Do not answer in free text.
 """
 
 ANSWER_TOOL = {
@@ -102,7 +102,7 @@ class AnswerGenerationError(RuntimeError):
 
 
 class AIConfigurationError(AnswerGenerationError):
-    """Raised when the Anthropic adapter is not configured or installed."""
+    """Raised when the AI adapter is not configured or installed."""
 
 
 class AIProviderError(AnswerGenerationError):
@@ -203,8 +203,8 @@ class AnswerGenerator(Protocol):
         """Generate a decision; source references remain untrusted."""
 
 
-class AnthropicAnswerGenerator:
-    """Claude adapter using forced, schema-constrained tool output."""
+class GeminiAnswerGenerator:
+    """Google Gemini adapter using structured JSON output."""
 
     def __init__(
         self,
@@ -236,24 +236,20 @@ class AnthropicAnswerGenerator:
         self._max_tokens = max_tokens
         self._client = client
 
-    def _get_client(self) -> object:
+    def _get_client(self) -> Any:
         if self._client is not None:
             return self._client
 
         try:
-            from anthropic import AsyncAnthropic
+            from google import genai
         except ImportError:
             raise AIConfigurationError(
-                "The Anthropic SDK is not installed. Install the configured AI dependency."
+                "The Google GenAI SDK is not installed. Install the configured AI dependency."
             ) from None
 
         client_creation_failed = False
         try:
-            client = AsyncAnthropic(
-                api_key=self._api_key,
-                timeout=self._timeout_seconds,
-                max_retries=self._max_retries,
-            )
+            client = genai.Client(api_key=self._api_key)
         except Exception:
             client_creation_failed = True
             client = None
@@ -294,30 +290,61 @@ class AnthropicAnswerGenerator:
                 for source in normalized_sources
             ],
         }
+
+        _response_schema = {
+            "type": "object",
+            "properties": {
+                "answer": {"type": "string"},
+                "confidence": {"type": "string", "enum": ["high", "low"]},
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "message_id": {"type": "string"},
+                            "label": {"type": "string"},
+                        },
+                        "required": ["message_id", "label"],
+                    },
+                },
+                "topic": {"type": "string"},
+                "needs_human": {"type": "boolean"},
+            },
+            "required": ["answer", "confidence", "sources", "topic", "needs_human"],
+        }
+
         user_message = (
-            "QUESTION and SOURCES follow as JSON data. Apply the system rules and call the "
-            f"required tool.\n{json.dumps(request_payload, ensure_ascii=False)}"
+            "QUESTION and SOURCES follow as JSON data. Apply the system rules and return "
+            f"a JSON object matching the required schema.\n{json.dumps(request_payload, ensure_ascii=False)}"
         )
 
         client = self._get_client()
+
+        try:
+            from google.genai import types
+        except ImportError:
+            raise AIConfigurationError(
+                "The Google GenAI SDK is not installed."
+            ) from None
+
         provider_failed = False
         try:
-            response = await client.messages.create(  # type: ignore[union-attr]
+            response = await client.aio.models.generate_content(
                 model=self._model,
-                max_tokens=self._max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": user_message}],
-                tools=[ANSWER_TOOL],
-                tool_choice={"type": "tool", "name": _ANSWER_TOOL_NAME},
-                timeout=self._timeout_seconds,
+                contents=user_message,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_PROMPT,
+                    max_output_tokens=self._max_tokens,
+                    temperature=0.1,
+                    response_mime_type="application/json",
+                    response_schema=_response_schema,
+                ),
             )
         except Exception as error:
             logger.warning(
                 "AI provider request failed",
                 extra={
                     "error_type": type(error).__name__,
-                    "request_id": getattr(error, "request_id", None),
-                    "status_code": getattr(error, "status_code", None),
                 },
             )
             provider_failed = True
@@ -326,40 +353,41 @@ class AnthropicAnswerGenerator:
         if provider_failed:
             raise AIProviderError("The AI service is temporarily unavailable.")
 
-        return _parse_response(response)
+        return _parse_gemini_response(response)
 
 
-def _field(value: object, name: str) -> object:
-    if isinstance(value, Mapping):
-        return value.get(name)
-    return getattr(value, name, None)
+def _parse_gemini_response(response: Any) -> AnswerDecision:
+    """Parse a Gemini structured JSON response into an AnswerDecision."""
 
-
-def _parse_response(response: object) -> AnswerDecision:
-    stop_reason = _field(response, "stop_reason")
-    if stop_reason == "max_tokens":
-        raise AIProviderError("The AI response reached its output limit.")
-    if stop_reason == "refusal":
-        raise AIProviderError("The AI service declined this request.")
-
-    content = _field(response, "content")
-    if not isinstance(content, Sequence) or isinstance(content, (str, bytes, bytearray)):
+    if response is None:
         raise MalformedAIResponseError("The AI service returned an invalid response.")
 
-    matching_blocks = [
-        block
-        for block in content
-        if _field(block, "type") == "tool_use" and _field(block, "name") == _ANSWER_TOOL_NAME
-    ]
-    if len(matching_blocks) != 1:
+    # Check for blocked responses
+    if hasattr(response, "prompt_feedback") and response.prompt_feedback:
+        block_reason = getattr(response.prompt_feedback, "block_reason", None)
+        if block_reason:
+            raise AIProviderError("The AI service declined this request.")
+
+    # Extract text from response
+    try:
+        text = response.text
+    except (AttributeError, ValueError):
         raise MalformedAIResponseError("The AI service returned an invalid response.")
 
-    tool_input = _field(matching_blocks[0], "input")
-    if not isinstance(tool_input, Mapping):
+    if not text or not text.strip():
+        raise MalformedAIResponseError("The AI service returned an invalid response.")
+
+    # Parse JSON
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        raise MalformedAIResponseError("The AI service returned an invalid response.") from None
+
+    if not isinstance(parsed, Mapping):
         raise MalformedAIResponseError("The AI service returned an invalid response.")
 
     try:
-        return _parse_decision(tool_input)
+        return _parse_decision(parsed)
     except (TypeError, ValueError, KeyError):
         raise MalformedAIResponseError("The AI service returned an invalid response.") from None
 
