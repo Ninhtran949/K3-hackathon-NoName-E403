@@ -1,0 +1,1 @@
+"""Discord course assistant package."""
