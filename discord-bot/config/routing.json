@@ -1,0 +1,29 @@
+{
+  "routes": [
+    {
+      "name": "devops",
+      "keywords": ["deploy", "docker", "server", "render"],
+      "role_id": "MENTOR_DEVOPS_ROLE_ID",
+      "priority": 20
+    },
+    {
+      "name": "machine-learning",
+      "keywords": ["model", "training", "fine-tune", "cuda"],
+      "role_id": "MENTOR_ML_ROLE_ID",
+      "priority": 20
+    },
+    {
+      "name": "academic",
+      "keywords": ["điểm", "chấm bài", "rubric", "deadline"],
+      "role_id": "TA_ACADEMIC_ROLE_ID",
+      "priority": 20
+    },
+    {
+      "name": "program-operations",
+      "keywords": ["lịch học", "sự kiện", "quy định"],
+      "role_id": "BTC_ROLE_ID",
+      "priority": 10
+    }
+  ],
+  "default_role_id": "MENTOR_ONCALL_ROLE_ID"
+}
