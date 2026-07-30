@@ -1,3 +1,15 @@
 .DS_Store
 node_modules/
+dist/
 *.env
+__pycache__/
+*.py[cod]
+.venv/
+
+# Local ChromaDB persistence
+backend/data/chroma/*
+!backend/data/chroma/.gitkeep
+
+# Local learner state
+backend/data/state/*
+!backend/data/state/.gitkeep

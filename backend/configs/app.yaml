@@ -1,0 +1,34 @@
+question_detection:
+  mode: question_mark
+  ignore_bot_messages: true
+  minimum_text_length: 3
+
+retrieval:
+  top_k: 5
+  minimum_similarity: 0.45
+  maximum_sources: 3
+
+confidence:
+  accepted_value: high
+
+onboarding:
+  enabled: true
+  maximum_suggestions: 2
+
+mentor_research:
+  enabled: true
+  maximum_approved_answer_length: 1600
+
+digest:
+  enabled: true
+  timezone: Asia/Bangkok
+  hour: 23
+  minute: 0
+  maximum_items: 10
+  poll_seconds: 60
+
+paths:
+  routing_config: ./configs/routing.yaml
+  onboarding_config: ./configs/onboarding.yaml
+  system_prompt: ./prompts/rag_answer.md
+  mentor_draft_prompt: ./prompts/mentor_draft.md

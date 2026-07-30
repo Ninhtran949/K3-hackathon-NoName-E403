@@ -1,0 +1,25 @@
+default:
+  mentor_mention: "<@&1532315399981633588>"
+
+routes:
+  - topic: devops
+    keywords:
+      - deploy
+      - docker
+      - server
+      - cuda
+    mentor_mention: "<@&1532315399981633588>"
+
+  - topic: machine-learning
+    keywords:
+      - model
+      - training
+      - fine-tune
+    mentor_mention: "<@&1532315399981633588>"
+
+  - topic: academic
+    keywords:
+      - điểm
+      - chấm bài
+      - deadline
+    mentor_mention: "<@&1532315399981633588>"

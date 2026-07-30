@@ -1,0 +1,20 @@
+[
+  {
+    "id": "demo-scope",
+    "title": "spec.md §2 — User stories",
+    "text": "Ba story bắt buộc của MVP là: trả lời câu hỏi có nguồn, chuyển câu hỏi có confidence thấp tới đúng mentor, và ghi câu hỏi chưa xử lý vào channel cần-hỗ-trợ.",
+    "source_url": ""
+  },
+  {
+    "id": "demo-permissions",
+    "title": "spec.md §6 — Discord setup",
+    "text": "Bot Discord cần các quyền View Channel, Send Messages, Read Message History và Add Reactions. Message Content Intent phải được bật trong Discord Developer Portal.",
+    "source_url": "https://discord.com/developers/applications"
+  },
+  {
+    "id": "demo-history",
+    "title": "spec.md §0 — Phạm vi MVP",
+    "text": "Bot chỉ đọc và xử lý tin nhắn mới kể từ lúc được thêm vào server; MVP không xử lý toàn bộ lịch sử chat cũ.",
+    "source_url": ""
+  }
+]

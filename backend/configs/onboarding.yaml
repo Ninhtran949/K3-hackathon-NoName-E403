@@ -1,0 +1,48 @@
+default:
+  suggestions:
+    - title: "Kênh học tập được bot theo dõi"
+      target: "{monitored_channels}"
+    - title: "Kênh hỏi mentor/BTC"
+      target: "{support_channel}"
+
+routes:
+  - topic: discord-and-devops
+    keywords:
+      - discord
+      - bot
+      - deploy
+      - docker
+      - server
+      - quyền
+    suggestions:
+      - title: "Discord Developer Portal"
+        target: "https://discord.com/developers/applications"
+      - title: "Kênh hỏi mentor/BTC"
+        target: "{support_channel}"
+
+  - topic: machine-learning
+    keywords:
+      - ai
+      - model
+      - training
+      - fine-tune
+      - embedding
+      - rag
+    suggestions:
+      - title: "Kênh học tập được bot theo dõi"
+        target: "{monitored_channels}"
+      - title: "Kênh hỏi mentor/BTC"
+        target: "{support_channel}"
+
+  - topic: academic
+    keywords:
+      - điểm
+      - chấm bài
+      - deadline
+      - lịch học
+      - bài tập
+    suggestions:
+      - title: "Kênh kế hoạch và thông báo học tập"
+        target: "{monitored_channels}"
+      - title: "Kênh hỏi mentor/BTC"
+        target: "{support_channel}"

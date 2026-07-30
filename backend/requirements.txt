@@ -1,0 +1,9 @@
+chromadb
+discord.py
+google-genai
+pydantic-settings
+pytest
+python-dotenv
+PyYAML
+sentence-transformers
+tzdata
