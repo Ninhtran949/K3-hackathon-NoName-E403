@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
 
 from bot.config import load_settings
 from bot.gemini_client import GeminiEngine
@@ -9,28 +8,27 @@ from bot.pipeline import AnswerPipeline
 from bot.rag import KnowledgeBase
 
 
-def ensure_knowledge(kb: KnowledgeBase, knowledge_dir: Path, reset: bool = False) -> None:
-    if reset or kb.count() == 0:
-        if reset:
-            kb.reset()
-        n = kb.ingest_markdown_dir(knowledge_dir)
-        print(f"Indexed {n} chunks from {knowledge_dir}")
-    else:
-        print(f"KB already has {kb.count()} chunks")
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="CLI test RAG assistant (no Discord)")
+    parser = argparse.ArgumentParser(
+        description="CLI test RAG — chỉ dùng KB kênh Discord đã sync (không đọc md)"
+    )
     parser.add_argument("question", nargs="?", help="Câu hỏi")
-    parser.add_argument("--reindex", action="store_true", help="Xoá và index lại knowledge/")
+    parser.add_argument(
+        "--purge-files",
+        action="store_true",
+        help="Xoá chunk nguồn file md/txt còn sót trong KB",
+    )
     args = parser.parse_args()
 
     settings = load_settings()
     kb = KnowledgeBase(settings.kb_dir)
-    ensure_knowledge(kb, settings.knowledge_dir, reset=args.reindex)
+    if args.purge_files:
+        n = kb.purge_non_channel_sources()
+        print(f"Purged {n} non-channel chunks")
+    print(f"KB channel chunks: {kb.count()} (chỉ #kênh Discord — chạy /sync_channels trên bot)")
 
     if not args.question:
-        print("Dùng: python -m bot.ask_cli \"deadline nộp bài tuần này là khi nào?\"")
+        print('Dùng: python -m bot.ask_cli "deadline nộp bài khi nào?"')
         return
 
     engine = GeminiEngine(settings.gemini_api_key, settings.gemini_model)

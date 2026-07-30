@@ -37,9 +37,9 @@ class QuestionStore:
         message_id: str,
         author_id: str,
         question: str,
-    ) -> None:
+    ) -> int | None:
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
+            cur = await db.execute(
                 """
                 INSERT OR IGNORE INTO pending_questions
                 (guild_id, channel_id, message_id, author_id, question, status)
@@ -48,6 +48,16 @@ class QuestionStore:
                 (guild_id, channel_id, message_id, author_id, question),
             )
             await db.commit()
+            if cur.lastrowid:
+                return int(cur.lastrowid)
+            # Đã tồn tại (IGNORE) → lấy id hiện có
+            db.row_factory = aiosqlite.Row
+            cur2 = await db.execute(
+                "SELECT id FROM pending_questions WHERE message_id = ?",
+                (message_id,),
+            )
+            row = await cur2.fetchone()
+            return int(row["id"]) if row else None
 
     async def mark_resolved(self, message_id: str) -> None:
         async with aiosqlite.connect(self.db_path) as db:
@@ -65,7 +75,10 @@ class QuestionStore:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cur = await db.execute(
-                "SELECT * FROM pending_questions WHERE id = ?",
+                """
+                SELECT * FROM pending_questions
+                WHERE id = ? AND status IN ('Pending', 'Escalated')
+                """,
                 (row_id,),
             )
             row = await cur.fetchone()

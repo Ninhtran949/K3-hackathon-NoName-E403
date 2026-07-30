@@ -19,9 +19,77 @@ class Chunk:
 
 _TOKEN = re.compile(r"[\wÀ-ỹ]+", re.UNICODE)
 
+# Map dấu tiếng Việt → không dấu (để khớp "deadline nop bai" ↔ "deadline nộp bài")
+_VI_MAP = str.maketrans(
+    {
+        "à": "a", "á": "a", "ả": "a", "ã": "a", "ạ": "a",
+        "ă": "a", "ằ": "a", "ắ": "a", "ẳ": "a", "ẵ": "a", "ặ": "a",
+        "â": "a", "ầ": "a", "ấ": "a", "ẩ": "a", "ẫ": "a", "ậ": "a",
+        "è": "e", "é": "e", "ẻ": "e", "ẽ": "e", "ẹ": "e",
+        "ê": "e", "ề": "e", "ế": "e", "ể": "e", "ễ": "e", "ệ": "e",
+        "ì": "i", "í": "i", "ỉ": "i", "ĩ": "i", "ị": "i",
+        "ò": "o", "ó": "o", "ỏ": "o", "õ": "o", "ọ": "o",
+        "ô": "o", "ồ": "o", "ố": "o", "ổ": "o", "ỗ": "o", "ộ": "o",
+        "ơ": "o", "ờ": "o", "ớ": "o", "ở": "o", "ỡ": "o", "ợ": "o",
+        "ù": "u", "ú": "u", "ủ": "u", "ũ": "u", "ụ": "u",
+        "ư": "u", "ừ": "u", "ứ": "u", "ử": "u", "ữ": "u", "ự": "u",
+        "ỳ": "y", "ý": "y", "ỷ": "y", "ỹ": "y", "ỵ": "y",
+        "đ": "d",
+        "À": "a", "Á": "a", "Ả": "a", "Ã": "a", "Ạ": "a",
+        "Ă": "a", "Ằ": "a", "Ắ": "a", "Ẳ": "a", "Ẵ": "a", "Ặ": "a",
+        "Â": "a", "Ầ": "a", "Ấ": "a", "Ẩ": "a", "Ẫ": "a", "Ậ": "a",
+        "È": "e", "É": "e", "Ẻ": "e", "Ẽ": "e", "Ẹ": "e",
+        "Ê": "e", "Ề": "e", "Ế": "e", "Ể": "e", "Ễ": "e", "Ệ": "e",
+        "Ì": "i", "Í": "i", "Ỉ": "i", "Ĩ": "i", "Ị": "i",
+        "Ò": "o", "Ó": "o", "Ỏ": "o", "Õ": "o", "Ọ": "o",
+        "Ô": "o", "Ồ": "o", "Ố": "o", "Ổ": "o", "Ỗ": "o", "Ộ": "o",
+        "Ơ": "o", "Ờ": "o", "Ớ": "o", "Ở": "o", "Ỡ": "o", "Ợ": "o",
+        "Ù": "u", "Ú": "u", "Ủ": "u", "Ũ": "u", "Ụ": "u",
+        "Ư": "u", "Ừ": "u", "Ứ": "u", "Ử": "u", "Ữ": "u", "Ự": "u",
+        "Ỳ": "y", "Ý": "y", "Ỷ": "y", "Ỹ": "y", "Ỵ": "y",
+        "Đ": "d",
+    }
+)
+
+# Từ viết tắt / biến thể thường gặp khi gõ tắt
+_QUERY_EXPAND: dict[str, tuple[str, ...]] = {
+    "dl": ("deadline",),
+    "deadl": ("deadline",),
+    "nopbai": ("nop", "bai", "deadline"),
+    "han": ("deadline", "han", "nop"),
+    "hn": ("hom", "nay"),
+    "ntn": ("nhu", "the", "nao"),
+    "nhiu": ("nhieu",),
+    "bao": ("bao", "nhieu"),
+    "ko": ("khong",),
+    "hok": ("khong",),
+    "kg": ("khong",),
+    "dc": ("duoc",),
+    "đc": ("duoc",),
+    "duoc": ("duoc",),
+    "vs": ("voi",),
+    "mik": ("minh",),
+    "mk": ("minh",),
+    "bai": ("bai", "assignment"),
+    "zoom": ("zoom", "link"),
+}
+
+
+def fold_vi(text: str) -> str:
+    return (text or "").translate(_VI_MAP).lower()
+
 
 def _tokens(text: str) -> list[str]:
-    return [t.lower() for t in _TOKEN.findall(text)]
+    """Token không dấu + mở rộng viết tắt để khớp câu gõ lỏng."""
+    folded = fold_vi(text)
+    raw = [t for t in _TOKEN.findall(folded)]
+    out: list[str] = []
+    for t in raw:
+        out.append(t)
+        # gộp nếu người dùng viết dính: nopbai, deadline...
+        if t in _QUERY_EXPAND:
+            out.extend(_QUERY_EXPAND[t])
+    return out
 
 
 def _chunk_text(text: str, source: str, size: int = 700, overlap: int = 100) -> list[Chunk]:
@@ -57,8 +125,18 @@ def _cosine(a: Counter, b: Counter) -> float:
     return dot / (na * nb)
 
 
+def _is_channel_source(source: str) -> bool:
+    """Chỉ chấp nhận nguồn từ kênh Discord đã sync (#channel...), không nhận file .md/.txt/code."""
+    s = (source or "").strip().lower()
+    if not s.startswith("#"):
+        return False
+    if s.endswith((".md", ".txt", ".py", ".json", ".csv")):
+        return False
+    return True
+
+
 class KnowledgeBase:
-    """Lightweight local KB (JSON + TF cosine) — không cần ChromaDB."""
+    """Lightweight local KB (JSON + TF cosine) — chỉ chứa tin kênh Discord đã sync."""
 
     def __init__(self, persist_dir: Path, collection_name: str = "course_knowledge") -> None:
         self.persist_dir = persist_dir
@@ -66,6 +144,10 @@ class KnowledgeBase:
         self.path = self.persist_dir / f"{collection_name}.json"
         self._chunks: dict[str, Chunk] = {}
         self._load()
+        removed = self.purge_non_channel_sources()
+        if removed:
+            # đã lưu trong purge
+            pass
 
     def _load(self) -> None:
         if not self.path.exists():
@@ -93,23 +175,29 @@ class KnowledgeBase:
         if self.path.exists():
             self.path.unlink()
 
+    def purge_non_channel_sources(self) -> int:
+        """Xoá mọi chunk lấy từ file md/txt/code — chỉ giữ nguồn #kênh Discord."""
+        before = len(self._chunks)
+        self._chunks = {
+            k: v for k, v in self._chunks.items() if _is_channel_source(v.source)
+        }
+        removed = before - len(self._chunks)
+        if removed:
+            self._save()
+        return removed
+
     def upsert_chunks(self, chunks: list[Chunk]) -> int:
         if not chunks:
             return 0
+        kept = 0
         for c in chunks:
-            self._chunks[c.doc_id] = c
-        self._save()
-        return len(chunks)
-
-    def ingest_markdown_dir(self, folder: Path) -> int:
-        total = 0
-        for path in sorted(folder.glob("**/*")):
-            if path.suffix.lower() not in {".md", ".txt"}:
+            if not _is_channel_source(c.source):
                 continue
-            text = path.read_text(encoding="utf-8")
-            chunks = _chunk_text(text, source=str(path.name))
-            total += self.upsert_chunks(chunks)
-        return total
+            self._chunks[c.doc_id] = c
+            kept += 1
+        if kept:
+            self._save()
+        return kept
 
     def upsert_message(
         self,
@@ -133,6 +221,8 @@ class KnowledgeBase:
         q = Counter(_tokens(question))
         scored: list[tuple[float, Chunk]] = []
         for chunk in self._chunks.values():
+            if not _is_channel_source(chunk.source):
+                continue
             sim = _cosine(q, Counter(_tokens(chunk.text)))
             if sim > 0:
                 scored.append((sim, chunk))

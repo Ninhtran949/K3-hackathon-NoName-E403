@@ -112,10 +112,17 @@ def main() -> None:
 
     settings = load_settings()
     kb = KnowledgeBase(settings.kb_dir)
-    if args.reindex or kb.count() == 0:
+    if args.reindex:
         kb.reset()
-        n = kb.ingest_markdown_dir(settings.knowledge_dir)
-        print(f"Indexed {n} chunks")
+        print("KB cleared. Hãy /sync_channels trên Discord rồi chạy lại eval (không seed md).")
+        return
+    removed = kb.purge_non_channel_sources()
+    if removed:
+        print(f"Purged {removed} file-based chunks")
+    print(f"KB channel chunks: {kb.count()}")
+    if kb.count() == 0:
+        print("KB trống — chỉ trả lời từ kênh đã sync. Chạy /sync_channels trên bot trước.")
+        return
 
     engine = GeminiEngine(settings.gemini_api_key, settings.gemini_model)
     pipeline = AnswerPipeline(

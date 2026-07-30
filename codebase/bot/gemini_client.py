@@ -9,12 +9,17 @@ from google import genai
 
 ANSWER_PROMPT = """Bạn là trợ lý học viên của khoá AI Thực Chiến trên Discord.
 Chỉ trả lời dựa trên CONTEXT bên dưới. Không bịa thông tin ngoài CONTEXT.
+CONTEXT chỉ được lấy từ kênh Discord đã sync (nguồn dạng #tên-kênh) — không dùng file md/code.
 Nếu CONTEXT không đủ để trả lời chắc chắn, đặt grounded=false.
+
+Hiểu câu hỏi người dùng:
+- Có thể gõ KHÔNG DẤU, viết tắt, sai chính tả, cú pháp lỏng (vd. "deadline nop bai khi nao", "nop muon bi tru bn").
+- Diễn giải ý định trước khi đối chiếu CONTEXT; không yêu cầu câu hỏi phải đúng ngữ pháp.
 
 Quy tắc bắt buộc:
 - Đòi đáp án lab/quiz/kiểm tra → grounded=false, từ chối ngắn, bảo hỏi Mentor/TA.
 - Hỏi điểm cá nhân / API key / token → grounded=false, từ chối.
-- Câu mơ hồ chung (vd. "nộp bài khi nào?" không nêu tuần) → được trả quy tắc tuần thường trong CONTEXT + nêu rõ giả định.
+- Câu mơ hồ chung (vd. "nộp bài khi nào?" / "nop bai khi nao") → được trả quy tắc tuần thường trong CONTEXT + nêu rõ giả định.
 - Câu hỏi mốc CỤ THỂ mà CONTEXT không có (vd. tuần 99, midterm, buổi X chưa ghi) → grounded=false.
   KHÔNG được lấy quy tắc tuần thường rồi trả lời như thể đó là deadline của mốc đó.
 - Không bịa deadline, link Zoom, điểm số.
@@ -98,17 +103,109 @@ class GeminiEngine:
             raw=raw,
         )
 
-    def summarize_chat(self, transcript: str, *, focus: str = "") -> str:
-        focus_line = f"\nTrọng tâm người dùng muốn: {focus.strip()}" if focus.strip() else ""
-        prompt = (
-            "Bạn là trợ lý Discord. Hãy tóm tắt hội thoại bên dưới bằng tiếng Việt.\n"
-            "Yêu cầu:\n"
-            "- 5–10 gạch đầu dòng ngắn\n"
-            "- Nêu quyết định / việc cần làm / câu hỏi còn mở (nếu có)\n"
-            "- Không bịa nội dung không có trong hội thoại\n"
-            f"{focus_line}\n\n"
-            f"HỘI THOẠI:\n{transcript}"
+    def decide_from_recent_chat(
+        self,
+        question: str,
+        transcript: str,
+        *,
+        mode: str = "general",
+    ) -> AIDecision:
+        """Trả lời follow-up từ hội thoại gần đây (có username Discord)."""
+        if not transcript.strip():
+            return AIDecision(
+                grounded=False,
+                answer="Mình chưa tìm thấy tin nhắn phù hợp trong kênh này.",
+                cite_indexes=[],
+                best_similarity=0.0,
+                raw="",
+            )
+
+        if mode == "user_messages":
+            prompt = (
+                "Bạn là trợ lý Discord. Người dùng hỏi về tin nhắn của MỘT người cụ thể.\n"
+                "Transcript bên dưới CHỈ gồm tin của người đó (đã lọc).\n"
+                "Mỗi dòng: display_name (@username / id=...): nội dung\n\n"
+                "QUY TẮC:\n"
+                "- Liệt kê/tóm tắt những gì họ đã nhắn trong kênh, trung thực theo transcript.\n"
+                "- Có thể gộp ý trùng; trích ngắn nội dung gốc nếu hữu ích.\n"
+                "- Không bịa tin họ không gửi.\n"
+                "- Nếu transcript trống / không có nội dung: grounded=false.\n"
+                "- Trả lời tiếng Việt, ngắn gọn.\n\n"
+                "Trả về ĐÚNG JSON (không markdown):\n"
+                "{\n"
+                '  "grounded": true/false,\n'
+                '  "answer": "..."\n'
+                "}\n\n"
+                f"CÂU HỎI:\n{question.strip()}\n\n"
+                f"TIN CỦA NGƯỜI ĐƯỢC HỎI:\n{transcript}"
+            )
+        else:
+            prompt = (
+                "Bạn là trợ lý Discord. Trả lời câu hỏi CHỈ dựa trên HỘI THOẠI GẦN ĐÂY bên dưới.\n"
+                "Mỗi dòng có dạng: display_name (@username / id=...): nội dung\n\n"
+                "QUY TẮC BẮT BUỘC:\n"
+                "- Hiểu đại từ: người đó, anh ấy, bạn ấy, người nói, account đó...\n"
+                "- Nếu hỏi TÊN TÀI KHOẢN / username Discord:\n"
+                "  * CHỈ lấy phần @username trong metadata dòng (giữa dấu ngoặc).\n"
+                "  * CẤM lấy từ nội dung tin nhắn (vd. chữ 'mai tiến đi học' KHÔNG phải username).\n"
+                "  * CẤM lấy display_name trừ khi user hỏi rõ 'tên hiển thị'.\n"
+                "  * Trả lời dạng: Username Discord: `@username` (tên hiển thị: ...).\n"
+                "- Nếu hỏi ai đó (@user / username) đã nhắn gì: chỉ dùng dòng của đúng người đó.\n"
+                "- Không bịa. Không đủ căn cứ → grounded=false.\n"
+                "- Không trả lời điểm cá nhân / API key / đáp án lab.\n"
+                "- Nếu câu hỏi là deadline/FAQ mà hội thoại không đủ → grounded=false "
+                "(để hệ thống dùng nguồn FAQ).\n\n"
+                "Trả về ĐÚNG JSON (không markdown):\n"
+                "{\n"
+                '  "grounded": true/false,\n'
+                '  "answer": "câu trả lời ngắn tiếng Việt"\n'
+                "}\n\n"
+                f"CÂU HỎI:\n{question.strip()}\n\n"
+                f"HỘI THOẠI GẦN ĐÂY:\n{transcript}"
+            )
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
         )
+        raw = (response.text or "").strip()
+        parsed = _parse_json(raw)
+        grounded = bool(parsed.get("grounded", False))
+        answer = str(parsed.get("answer", "")).strip() or raw
+        return AIDecision(
+            grounded=grounded,
+            answer=answer,
+            cite_indexes=[],
+            best_similarity=1.0 if grounded else 0.0,
+            raw=raw,
+        )
+
+    def summarize_chat(self, transcript: str, *, focus: str = "") -> str:
+        focus = focus.strip()
+        if focus:
+            prompt = (
+                "Bạn là trợ lý Discord. Người dùng muốn tóm tắt theo MỘT trọng tâm cụ thể.\n"
+                f"TRỌNG TÂM: {focus}\n\n"
+                "QUY TẮC BẮT BUỘC:\n"
+                "- CHỈ tóm tắt các câu/tin liên quan trực tiếp tới trọng tâm trên.\n"
+                "- BỎ QUA hoàn toàn mọi chủ đề khác (deadline, thời tiết, dự án kỹ thuật, FAQ, tán gẫu… "
+                "nếu không liên quan trọng tâm).\n"
+                "- Không liệt kê chủ đề ngoài trọng tâm dù chúng có trong hội thoại.\n"
+                "- Không bịa thông tin không có trong hội thoại.\n"
+                "- Viết tiếng Việt, 3–7 gạch đầu dòng ngắn.\n"
+                "- Nếu có: nêu việc cần làm / câu hỏi còn mở CHỈ về trọng tâm.\n"
+                "- Nếu gần như không có tin nào liên quan trọng tâm: nói rõ "
+                "\"Không thấy nội dung liên quan tới: <trọng tâm>\" và dừng, không tóm tắt phần khác.\n\n"
+                f"HỘI THOẠI:\n{transcript}"
+            )
+        else:
+            prompt = (
+                "Bạn là trợ lý Discord. Hãy tóm tắt hội thoại bên dưới bằng tiếng Việt.\n"
+                "Yêu cầu:\n"
+                "- 5–10 gạch đầu dòng ngắn\n"
+                "- Nêu quyết định / việc cần làm / câu hỏi còn mở (nếu có)\n"
+                "- Không bịa nội dung không có trong hội thoại\n\n"
+                f"HỘI THOẠI:\n{transcript}"
+            )
         response = self.client.models.generate_content(
             model=self.model,
             contents=prompt,
