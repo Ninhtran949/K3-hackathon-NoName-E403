@@ -15,6 +15,7 @@ Nếu CONTEXT không đủ để trả lời chắc chắn, đặt grounded=fals
 Hiểu câu hỏi người dùng:
 - Có thể gõ KHÔNG DẤU, viết tắt, sai chính tả, cú pháp lỏng (vd. "deadline nop bai khi nao", "nop muon bi tru bn").
 - Diễn giải ý định trước khi đối chiếu CONTEXT; không yêu cầu câu hỏi phải đúng ngữ pháp.
+- Nếu CONTEXT có mốc thời gian dạng [sent=YYYY-MM-DD ...]: 'mai' trong tin ngày D = D+1; quy về ngày tuyệt đối trước khi trả lời.
 
 Quy tắc bắt buộc:
 - Đòi đáp án lab/quiz/kiểm tra → grounded=false, từ chối ngắn, bảo hỏi Mentor/TA.
@@ -124,7 +125,8 @@ class GeminiEngine:
             prompt = (
                 "Bạn là trợ lý Discord. Người dùng hỏi về tin nhắn của MỘT người cụ thể.\n"
                 "Transcript bên dưới CHỈ gồm tin của người đó (đã lọc).\n"
-                "Mỗi dòng: display_name (@username / id=...): nội dung\n\n"
+                "Mỗi dòng: [sent=... | ngày gửi=...] display_name (@username / id=...): nội dung\n"
+                "Dòng đầu có NOW=... (giờ hiện tại UTC+7).\n\n"
                 "QUY TẮC:\n"
                 "- Liệt kê/tóm tắt những gì họ đã nhắn trong kênh, trung thực theo transcript.\n"
                 "- Có thể gộp ý trùng; trích ngắn nội dung gốc nếu hữu ích.\n"
@@ -139,12 +141,39 @@ class GeminiEngine:
                 f"CÂU HỎI:\n{question.strip()}\n\n"
                 f"TIN CỦA NGƯỜI ĐƯỢC HỎI:\n{transcript}"
             )
+        elif mode == "temporal":
+            prompt = (
+                "Bạn là trợ lý Discord, giỏi suy luận thời gian tương đối.\n"
+                "Transcript có NOW=... và mỗi tin có sent=YYYY-MM-DD HH:MM UTC+7.\n\n"
+                "QUY TẮC THỜI GIAN BẮT BUỘC:\n"
+                "- 'mai' / 'ngày mai' trong tin gửi ngày D nghĩa là ngày D+1.\n"
+                "- 'hôm nay' / 'nay' trong tin gửi ngày D nghĩa là ngày D.\n"
+                "- 'hôm qua' trong tin gửi ngày D nghĩa là ngày D-1.\n"
+                "- Khi user hỏi 'nay/hôm nay ... mấy giờ': quy mọi mốc về ngày tuyệt đối, "
+                "rồi chỉ trả lời mốc trùng NGÀY của NOW.\n"
+                "- Ví dụ: tin ngày 30/7 nói 'mai đi học 8h' → sự kiện 31/7 08:00. "
+                "Nếu NOW là 31/7 và hỏi 'nay đi học mấy giờ' → trả lời 8h "
+                "(có thể nói rõ: hôm qua báo mai 8h = hôm nay 8h).\n"
+                "- Nếu không có lịch nào khớp ngày đang hỏi → grounded=false, nói chưa thấy lịch cho ngày đó.\n"
+                "- Không bịa. Chỉ dựa transcript.\n"
+                "- Hiểu câu không dấu: 'nay di hoc may gio'.\n\n"
+                "Trả về ĐÚNG JSON (không markdown):\n"
+                "{\n"
+                '  "grounded": true/false,\n'
+                '  "answer": "câu trả lời ngắn tiếng Việt"\n'
+                "}\n\n"
+                f"CÂU HỎI:\n{question.strip()}\n\n"
+                f"HỘI THOẠI (có timestamp):\n{transcript}"
+            )
         else:
             prompt = (
                 "Bạn là trợ lý Discord. Trả lời câu hỏi CHỈ dựa trên HỘI THOẠI GẦN ĐÂY bên dưới.\n"
-                "Mỗi dòng có dạng: display_name (@username / id=...): nội dung\n\n"
+                "Mỗi dòng có dạng: [sent=... | ngày gửi=...] display_name (@username / id=...): nội dung\n"
+                "Dòng đầu có NOW=... (UTC+7).\n\n"
                 "QUY TẮC BẮT BUỘC:\n"
                 "- Hiểu đại từ: người đó, anh ấy, bạn ấy, người nói, account đó...\n"
+                "- Suy luận thời gian: 'mai' trong tin ngày D = ngày D+1; "
+                "khi hỏi 'hôm nay' so với NOW.\n"
                 "- Nếu hỏi TÊN TÀI KHOẢN / username Discord:\n"
                 "  * CHỈ lấy phần @username trong metadata dòng (giữa dấu ngoặc).\n"
                 "  * CẤM lấy từ nội dung tin nhắn (vd. chữ 'mai tiến đi học' KHÔNG phải username).\n"

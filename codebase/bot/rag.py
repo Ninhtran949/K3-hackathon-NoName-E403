@@ -206,14 +206,41 @@ class KnowledgeBase:
         content: str,
         channel_name: str,
         jump_url: str,
+        created_at=None,
     ) -> int:
         source = f"#{channel_name}"
-        chunks = _chunk_text(content, source=source, size=500, overlap=80)
+        text = content
+        if created_at is not None:
+            try:
+                from datetime import datetime, timedelta, timezone
+
+                vn = timezone(timedelta(hours=7))
+                local = (
+                    created_at.astimezone(vn)
+                    if getattr(created_at, "tzinfo", None)
+                    else created_at.replace(tzinfo=timezone.utc).astimezone(vn)
+                )
+                text = f"[sent={local.strftime('%Y-%m-%d %H:%M')} UTC+7] {content}"
+            except Exception:  # noqa: BLE001
+                text = content
+        chunks = _chunk_text(text, source=source, size=500, overlap=80)
         for c in chunks:
             c.doc_id = hashlib.sha1(f"{message_id}:{c.doc_id}".encode()).hexdigest()[:16]
             c.jump_url = jump_url
             c.source = f"{source} · msg:{message_id}"
         return self.upsert_chunks(chunks)
+
+    def remove_message(self, message_id: str) -> int:
+        """Gỡ mọi chunk gắn với msg:<id> khỏi KB."""
+        needle = f"msg:{message_id}"
+        before = len(self._chunks)
+        self._chunks = {
+            k: v for k, v in self._chunks.items() if needle not in (v.source or "")
+        }
+        removed = before - len(self._chunks)
+        if removed:
+            self._save()
+        return removed
 
     def query(self, question: str, top_k: int = 4) -> list[dict]:
         if not self._chunks:

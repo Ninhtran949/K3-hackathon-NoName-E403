@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 
 import discord
 from discord import app_commands
@@ -19,6 +20,28 @@ from bot.rag import KnowledgeBase
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("course-bot")
+
+VN_TZ = timezone(timedelta(hours=7))
+
+
+def _now_vn() -> datetime:
+    return datetime.now(VN_TZ)
+
+
+def _format_msg_timestamp(dt: datetime, *, now: datetime | None = None) -> str:
+    """Gắn thời điểm gửi + quan hệ với hôm nay (UTC+7) để suy ra mai/hôm qua."""
+    now = now or _now_vn()
+    local = dt.astimezone(VN_TZ) if dt.tzinfo else dt.replace(tzinfo=timezone.utc).astimezone(VN_TZ)
+    delta_days = (local.date() - now.date()).days
+    if delta_days == 0:
+        rel = "ngày gửi=Hôm nay"
+    elif delta_days == -1:
+        rel = "ngày gửi=Hôm qua"
+    elif delta_days == 1:
+        rel = "ngày gửi=Ngày mai"
+    else:
+        rel = f"ngày gửi={delta_days:+d} ngày so với hôm nay"
+    return f"sent={local.strftime('%Y-%m-%d %H:%M')} UTC+7 | {rel}"
 
 
 class CourseBot(commands.Bot):
@@ -138,8 +161,9 @@ async def _recent_user_transcript(
     limit: int = 25,
     only_author_ids: set[int] | None = None,
 ) -> str:
-    """Lấy tin người dùng gần đây kèm username Discord để trả lời follow-up."""
+    """Lấy tin người dùng gần đây kèm username + thời gian gửi (UTC+7)."""
     lines: list[str] = []
+    now = _now_vn()
     scan_limit = min(500, max(limit * 8, 80))
     async for message in channel.history(limit=scan_limit):
         if message.author.bot:
@@ -151,10 +175,20 @@ async def _recent_user_transcript(
             continue
         display = message.author.display_name
         username = message.author.name
-        lines.append(f"{display} (@{username} / id={message.author.id}): {text}")
+        ts = _format_msg_timestamp(message.created_at, now=now)
+        lines.append(
+            f"[{ts}] {display} (@{username} / id={message.author.id}): {text}"
+        )
         if len(lines) >= limit:
             break
-    return "\n".join(reversed(lines))
+    header = (
+        f"NOW={now.strftime('%Y-%m-%d %H:%M')} UTC+7 | "
+        f"weekday={now.strftime('%A')} | timezone=Asia/Ho_Chi_Minh\n"
+        "Quy ước tương đối trong nội dung tin: 'mai'/'hôm nay'/'hôm qua' tính theo NGÀY GỬI của tin đó, "
+        "rồi quy về ngày tuyệt đối so với NOW.\n"
+    )
+    body = "\n".join(reversed(lines))
+    return header + body if body else ""
 
 
 async def _resolve_target_user_ids(
@@ -639,6 +673,7 @@ async def sync_channels(interaction: discord.Interaction, limit: int = 200) -> N
                 content=message.content,
                 channel_name=getattr(channel, "name", str(channel.id)),
                 jump_url=message.jump_url,
+                created_at=message.created_at,
             )
     await interaction.followup.send(
         f"Đã nạp/ cập nhật khoảng {total} chunks từ kênh kiến thức.",
@@ -646,10 +681,47 @@ async def sync_channels(interaction: discord.Interaction, limit: int = 200) -> N
     )
 
 
+def _ingest_channel_message(message: discord.Message) -> int:
+    """Nạp tin vào KB nếu thuộc kênh kiến thức đã cấu hình."""
+    if message.author.bot:
+        return 0
+    content = (message.content or "").strip()
+    if not content:
+        return 0
+    allowed = set(bot.settings.knowledge_channel_ids)
+    if not allowed or message.channel.id not in allowed:
+        return 0
+    if not isinstance(message.channel, (discord.TextChannel, discord.Thread)):
+        return 0
+    n = bot.kb.upsert_message(
+        message_id=str(message.id),
+        content=content,
+        channel_name=getattr(message.channel, "name", str(message.channel.id)),
+        jump_url=message.jump_url,
+        created_at=message.created_at,
+    )
+    if n:
+        log.info(
+            "KB live-update +%s chunks from #%s msg=%s (total=%s)",
+            n,
+            getattr(message.channel, "name", message.channel.id),
+            message.id,
+            bot.kb.count(),
+        )
+    return n
+
+
 @bot.event
 async def on_message(message: discord.Message) -> None:
     if message.author.bot or not bot.user:
         return
+
+    # Cập nhật KB ngay khi có tin mới trong kênh kiến thức
+    try:
+        _ingest_channel_message(message)
+    except Exception:  # noqa: BLE001
+        log.exception("live KB ingest failed")
+
     await bot.process_commands(message)
 
     mentioned = bot.user in message.mentions
@@ -689,6 +761,32 @@ async def on_message(message: discord.Message) -> None:
             else:
                 reply = f"Lỗi khi gọi AI: `{type(exc).__name__}`."
     await message.reply(reply)
+
+
+@bot.event
+async def on_message_edit(before: discord.Message, after: discord.Message) -> None:
+    """Tin sửa trong kênh kiến thức → cập nhật lại KB."""
+    if after.author.bot or not after.content:
+        return
+    try:
+        _ingest_channel_message(after)
+    except Exception:  # noqa: BLE001
+        log.exception("live KB ingest on edit failed")
+
+
+@bot.event
+async def on_message_delete(message: discord.Message) -> None:
+    """Tin xoá trong kênh kiến thức → gỡ khỏi KB nếu có."""
+    if not bot.settings.knowledge_channel_ids:
+        return
+    if message.channel.id not in bot.settings.knowledge_channel_ids:
+        return
+    try:
+        removed = bot.kb.remove_message(str(message.id))
+        if removed:
+            log.info("KB removed %s chunks for deleted msg=%s", removed, message.id)
+    except Exception:  # noqa: BLE001
+        log.exception("live KB delete failed")
 
 
 def main() -> None:

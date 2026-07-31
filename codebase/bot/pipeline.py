@@ -21,6 +21,12 @@ _USER_MSG_LOOKUP_RE = re.compile(
     r"(đã|da)\s*(nhắn|nhan|nói|noi|gửi|gui).{0,10}(gì|gi|j)",
     re.IGNORECASE,
 )
+_TEMPORAL_Q_RE = re.compile(
+    r"(hôm\s*nay|hom\s*nay|\bnay\b|ngày\s*mai|ngay\s*mai|\bmai\b|hôm\s*qua|hom\s*qua|"
+    r"mấy\s*giờ|may\s*gio|lúc\s*mấy|luc\s*may|mấy\s*h\b|may\s*h\b|"
+    r"đi\s*học|di\s*hoc|deadline|hạn\s*nộp|han\s*nop)",
+    re.IGNORECASE,
+)
 
 
 def _is_identity_question(question: str) -> bool:
@@ -39,6 +45,11 @@ def _is_user_message_lookup(question: str) -> bool:
     ):
         return True
     return False
+
+
+def _is_temporal_question(question: str) -> bool:
+    q = question or ""
+    return bool(_TEMPORAL_Q_RE.search(q) or _TEMPORAL_Q_RE.search(fold_vi(q)))
 
 
 def parse_mention_ids(text: str) -> list[int]:
@@ -101,6 +112,21 @@ class AnswerPipeline:
                 hits=[],
                 sources=[label] if chat_decision.grounded else [],
             )
+
+        # Câu hỏi thời gian lịch (nay/mai đi học mấy giờ...): ưu tiên hội thoại có timestamp
+        if _is_temporal_question(question) and recent_chat.strip():
+            chat_decision = self.engine.decide_from_recent_chat(
+                question,
+                recent_chat,
+                mode="temporal",
+            )
+            if chat_decision.grounded:
+                label = channel_label or "hội thoại gần đây trong kênh"
+                return AnswerResult(
+                    decision=chat_decision,
+                    hits=[],
+                    sources=[label],
+                )
 
         # Câu hỏi tên tài khoản / người nói: CHỈ dùng metadata hội thoại, không RAG FAQ
         if _is_identity_question(question) and recent_chat.strip():
